@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#2563eb">
+    <title>帳單掃描器</title>
+    
+    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoi5bm36KGM6aKR5bGx5Y+3Iiwic2hvcnRfbmFtZSI6I+Wxt+WnlOemjyIsInN0YXJ0X3VybCI6Ii4iLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsImJhY2tncm91bmRfY29sb3IiOiIjZmZmZmZmIiwidGhlbWVfY29sb3IiOiIjMjU2M2ViIn0=">
+    
+    <script src='https://unpkg.com/tesseract.js@4.1.1/dist/tesseract.min.js'></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f3f4f6; padding-top: 70px; padding-bottom: 30px; }
+        .top-bar { position: fixed; top: 0; left: 0; right: 0; background: #2563eb; padding: 10px; display: flex; gap: 8px; overflow-x: auto; z-index: 1000; }
+        .btn { background: white; border: none; padding: 10px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; color: #2563eb; cursor: pointer; white-space: nowrap; }
+        .btn-secondary { background: rgba(255,255,255,0.9); }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .camera-full { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: black; z-index: 2000; display: none; flex-direction: column; }
+        #video { width: 100%; height: 100%; object-fit: cover; }
+        .camera-frame { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; height: 50%; border: 3px solid #00ff00; box-shadow: 0 0 0 9999px rgba(0,0,0,0.6); }
+        .camera-btn { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); width: 70px; height: 70px; background: white; border-radius: 50%; border: 4px solid rgba(255,255,255,0.5); cursor: pointer; }
+        .close-btn { position: absolute; top: 20px; right: 20px; color: white; font-size: 30px; cursor: pointer; background: rgba(0,0,0,0.5); width: 45px; height: 45px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+        
+        .container { max-width: 600px; margin: 0 auto; padding: 0 15px; }
+        .section { background: white; border-radius: 16px; padding: 20px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); display: none; }
+        .section-title { font-size: 17px; font-weight: 700; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+        
+        .form-group { margin-bottom: 12px; }
+        label { font-size: 13px; color: #6b7280; margin-bottom: 4px; display: block; font-weight: 600; }
+        input, select, textarea { width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 10px; font-size: 15px; }
+        
+        .preview-img { width: 100%; max-height: 300px; object-fit: contain; background: #f9fafb; border-radius: 12px; margin-bottom: 10px; }
+        
+        table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 10px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #f3f4f6; }
+        th { color: #6b7280; font-size: 12px; }
+        td input { padding: 6px; font-size: 14px; }
+        
+        .record-item { display: flex; justify-content: space-between; padding: 15px; border-bottom: 1px solid #f3f4f6; cursor: pointer; }
+        .record-item:hover { background: #f9fafb; }
+        .record-amount { color: #059669; font-weight: bold; }
+        
+        #file-input { display: none; }
+        
+        .loading { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.9); z-index: 3000; flex-direction: column; justify-content: center; align-items: center; color: white; }
+        .spinner { width: 50px; height: 50px; border: 4px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 15px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        .error-box { background: #fee2e2; color: #991b1b; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-size: 14px; display: none; }
+        
+        .add-btn { width: 100%; padding: 10px; background: #f3f4f6; border: 2px dashed #d1d5db; border-radius: 8px; margin-top: 10px; cursor: pointer; }
+        
+        .rotate-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        .rotate-row button { flex: 1; padding: 8px; background: #f3f4f6; border: none; border-radius: 6px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="top-bar">
+    <button class="btn" onclick="app.openCamera()" id="camBtn">📷 相機</button>
+    <button class="btn btn-secondary" onclick="document.getElementById('file-input').click()">🖼️ 相簿</button>
+    <button class="btn btn-secondary" onclick="app.showManual()">✏️ 手動</button>
+    <button class="btn btn-secondary" onclick="app.exportExcel()">📗 Excel</button>
+    <button class="btn btn-secondary" onclick="app.exportCSV()">📄 CSV</button>
+    <button class="btn btn-danger" onclick="app.clearAll()">清空</button>
+</div>
+
+<input type="file" id="file-input" accept="image/*" onchange="app.handleFile(this)">
+
+<div class="camera-full" id="cameraBox">
+    <video id="video" autoplay playsinline></video>
+    <div class="camera-frame"></div>
+    <div class="close-btn" onclick="app.closeCamera()">✕</div>
+    <div class="camera-btn" onclick="app.capture()"></div>
+</div>
+
+<div class="loading" id="loading">
+    <div class="spinner"></div>
+    <div>正在識別...<span id="progress">0</span>%</div>
+    <div style="font-size: 12px; margin-top: 10px; opacity: 0.7;">請勿關閉頁面</div>
+    <button class="btn btn-secondary" style="margin-top: 20px;" onclick="app.cancelOCR()">取消</button>
+</div>
+
+<div class="container">
+    <div class="error-box" id="error"></div>
+    
+    <!-- 預覽區 -->
+    <div class="section" id="previewSection" style="display: none;">
+        <div class="section-title">圖片預覽</div>
+        <img id="previewImg" class="preview-img">
+        <div class="rotate-row">
+            <button onclick="app.rotate(-90)">↺ 左轉</button>
+            <button onclick="app.rotate(90)">↻ 右轉</button>
+        </div>
+        <button class="btn" style="width: 100%; margin-bottom: 8px;" onclick="app.retryOCR()">🔄 重新識別</button>
+        <button class="btn btn-secondary" style="width: 100%;" onclick="app.closePreview()">關閉</button>
+    </div>
+    
+    <!-- 手動輸入 -->
+    <div class="section" id="manualSection">
+        <div class="section-title">手動輸入</div>
+        <textarea id="manualText" rows="5" placeholder="貼上帳單文字..."></textarea>
+        <button class="btn" style="width: 100%; margin-top: 10px;" onclick="app.parseManual()">解析</button>
+    </div>
+    
+    <!-- 編輯器 -->
+    <div class="section" id="editSection">
+        <div class="section-title">編輯帳單 <button class="btn btn-secondary" onclick="app.save()">保存</button></div>
+        
+        <div class="form-group">
+            <label>商家</label>
+            <input type="text" id="v_vendor">
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="form-group">
+                <label>日期</label>
+                <input type="date" id="v_date">
+            </div>
+            <div class="form-group">
+                <label>幣種</label>
+                <select id="v_currency">
+                    <option value="HKD">HKD</option>
+                    <option value="TWD">TWD</option>
+                    <option value="JPY">JPY</option>
+                    <option value="THB">THB</option>
+                    <option value="USD">USD</option>
+                    <option value="CNY">CNY</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label>品項</label>
+            <table>
+                <thead><tr><th>名稱</th><th>中文</th><th>金額</th><th></th></tr></thead>
+                <tbody id="itemsBody"></tbody>
+            </table>
+            <button class="add-btn" onclick="app.addItem()">+ 添加</button>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="form-group"><label>小計</label><input type="number" id="v_sub" step="0.01"></div>
+            <div class="form-group"><label>稅項</label><input type="number" id="v_tax" step="0.01"></div>
+        </div>
+        
+        <div class="form-group">
+            <label>總計</label>
+            <input type="number" id="v_total" step="0.01" style="font-size: 18px; font-weight: bold; color: #059669;">
+        </div>
+        
+        <div style="display: flex; gap: 10px;">
+            <button class="btn btn-danger" style="flex: 1;" onclick="app.deleteCurrent()">刪除</button>
+            <button class="btn" style="flex: 2;" onclick="app.save()">確認保存</button>
+        </div>
+    </div>
+    
+    <!-- 記錄列表 -->
+    <div class="section" style="display: block;">
+        <div class="section-title">記錄 (<span id="count">0</span>)</div>
+        <div id="list"></div>
+    </div>
+</div>
+
+<script>
+const app = {
+    records: [],
+    currentId: null,
+    stream: null,
+    currentImg: null,
+    currentCanvas: null,
+    rotation: 0,
+    worker: null,
+    
+    init() {
+        const saved = localStorage.getItem('bills');
+        if (saved) {
+            this.records = JSON.parse(saved);
+            this.renderList();
+        }
+    },
+    
+    showError(msg) {
+        const e = document.getElementById('error');
+        e.textContent = msg;
+        e.style.display = 'block';
+        setTimeout(() => e.style.display = 'none', 5000);
+    },
+    
+    // ========== 相機（修復閃退） ==========
+    async openCamera() {
+        try {
+            this.stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { 
+                    facingMode: 'environment',
+                    width: { ideal: 1280 }, // 降低解析度防止閃退
+                    height: { ideal: 720 }
+                } 
+            });
+            const video = document.getElementById('video');
+            video.srcObject = this.stream;
+            document.getElementById('cameraBox').style.display = 'flex';
+        } catch(e) {
+            this.showError('相機錯誤：' + e.message);
+        }
+    },
+    
+    closeCamera() {
+        document.getElementById('cameraBox').style.display = 'none';
+        if (this.stream) {
+            this.stream.getTracks().forEach(t => t.stop());
+            this.stream = null;
+        }
+    },
+    
+    capture() {
+        const video = document.getElementById('video');
+        const canvas = document.createElement('canvas');
+        // 限制大小防止記憶體爆掉
+        const scale = Math.min(1, 1280 / video.videoWidth);
+        canvas.width = video.videoWidth * scale;
+        canvas.height = video.videoHeight * scale;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        this.closeCamera();
+        this.processImage(canvas);
+    },
+    
+    // ========== 檔案處理（修復重新識別） ==========
+    handleFile(input) {
+        if (!input.files[0]) return;
+        const file = input.files[0];
+        input.value = ''; // 關鍵：清空允許重選
+        
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                // 壓縮圖片
+                const max = 1500;
+                let w = img.width, h = img.height;
+                if (w > max || h > max) {
+                    if (w > h) { h = h * (max/w); w = max; }
+                    else { w = w * (max/h); h = max; }
+                }
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = w; canvas.height = h;
+                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                
+                this.currentImg = img;
+                this.currentCanvas = canvas;
+                this.rotation = 0;
+                
+                document.getElementById('previewImg').src = canvas.toDataURL();
+                document.getElementById('previewSection').style.display = 'block';
+                
+                this.processImage(canvas);
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    },
+    
+    rotate(deg) {
+        this.rotation = (this.rotation + deg) % 360;
+        document.getElementById('previewImg').style.transform = `rotate(${this.rotation}deg)`;
+    },
+    
+    closePreview() {
+        document.getElementById('previewSection').style.display = 'none';
+    },
+    
+    // 關鍵修復：重新識別使用正確的canvas
+    retryOCR() {
+        if (!this.currentCanvas) return;
+        
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 如果有旋轉，需要調整canvas尺寸
+        if (Math.abs(this.rotation) === 90 || Math.abs(this.rotation) === 270) {
+            canvas.width = this.currentCanvas.height;
+            canvas.height = this.currentCanvas.width;
+        } else {
+            canvas.width = this.currentCanvas.width;
+            canvas.height = this.currentCanvas.height;
+        }
+        
+        ctx.translate(canvas.width/2, canvas.height/2);
+        ctx.rotate(this.rotation * Math.PI / 180);
+        ctx.drawImage(this.currentCanvas, -this.currentCanvas.width/2, -this.currentCanvas.height/2);
+        
+        this.processImage(canvas);
+    },
+    
+    // ========== OCR ==========
+    async processImage(canvas) {
+        document.getElementById('loading').style.display = 'flex';
+        document.getElementById('progress').textContent = '0';
+        
+        try {
+            // 預處理：轉灰度
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
+            const d = imgData.data;
+            for (let i=0; i<d.length; i+=4) {
+                const g = d[i]*0.299 + d[i+1]*0.587 + d[i+2]*0.114;
+                d[i] = d[i+1] = d[i+2] = g > 140 ? 255 : g < 80 ? 0 : g;
+            }
+            ctx.putImageData(imgData, 0, 0);
+            
+            // 使用簡化版識別（只中英，避免記憶體爆炸）
+            const result = await Tesseract.recognize(
+                canvas,
+                'chi_sim+eng',
+                {
+                    logger: m => {
+                        if (m.status === 'recognizing text') {
+                            document.getElementById('progress').textContent = Math.round(m.progress * 100);
+                        }
+                    },
+                    errorHandler: e => console.log(e)
+                }
+            );
+            
+            const text = result.data.text;
+            console.log('識別結果:', text);
+            this.parseText(text);
+            
+        } catch(e) {
+            this.showError('識別失敗：' + e.message);
+        } finally {
+            document.getElementById('loading').style.display = 'none';
+        }
+    },
+    
+    cancelOCR() {
+        // Tesseract 4.x 不支援中途取消，只能刷新頁面
+        location.reload();
+    },
+    
+    // ========== 解析 ==========
+    parseText(text) {
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+        const data = { vendor: '', date: new Date().toISOString().split('T')[0], currency: 'HKD', items: [], subtotal: 0, tax: 0, total: 0 };
+        
+        // 簡易解析
+        lines.forEach(line => {
+            // 日期
+            const d = line.match(/(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/);
+            if (d) data.date = d[1];
+            
+            // 商家（第一行）
+            if (!data.vendor && line.length > 2 && line.length < 20 && !/\d/.test(line)) {
+                data.vendor = line.replace(/[@#*]/g, '');
+            }
+            
+            // 品項 $金額
+            const m = line.match(/^(.+?)\s*[\$¥￥]\s*([\d,]+(?:\.\d+)?)/);
+            if (m && !/總計|合計|Total/.test(line)) {
+                data.items.push({ name: m[1].trim(), nameCN: m[1].trim(), price: parseFloat(m[2].replace(/,/g,'')) });
+            }
+            
+            // 總計
+            const t = line.match(/總[計額]|合計|Total[:\s]*[\$¥￥]?\s*([\d,]+(?:\.\d+)?)/i);
+            if (t) data.total = parseFloat(t[1]?.replace(/,/g,'') || 0);
+        });
+        
+        // 計算
+        if (data.items.length) data.subtotal = data.items.reduce((a,b) => a + b.price, 0);
+        if (!data.total && data.subtotal) data.total = data.subtotal;
+        
+        this.openEditor(data);
+    },
+    
+    // ========== 編輯器 ==========
+    openEditor(data, id) {
+        this.currentId = id || Date.now().toString();
+        document.getElementById('editSection').style.display = 'block';
+        document.getElementById('manualSection').style.display = 'none';
+        
+        document.getElementById('v_vendor').value = data.vendor || '';
+        document.getElementById('v_date').value = data.date || '';
+        document.getElementById('v_currency').value = data.currency || 'HKD';
+        document.getElementById('v_sub').value = data.subtotal || '';
+        document.getElementById('v_tax').value = data.tax || '';
+        document.getElementById('v_total').value = data.total || '';
+        
+        const tb = document.getElementById('itemsBody');
+        tb.innerHTML = '';
+        if (data.items?.length) {
+            data.items.forEach(i => this.addItem(i));
+        } else {
+            this.addItem();
+        }
+        
+        window.scrollTo(0, document.getElementById('editSection').offsetTop - 80);
+    },
+    
+    addItem(item = {name:'',nameCN:'',price:''}) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td><input value="${item.name}" class="i-name"></td><td><input value="${item.nameCN}" class="i-cn"></td><td><input type="number" value="${item.price}" class="i-price"></td><td><button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:red;cursor:pointer;">×</button></td>`;
+        document.getElementById('itemsBody').appendChild(tr);
+    },
+    
+    collect() {
+        const items = [];
+        document.querySelectorAll('#itemsBody tr').forEach(r => {
+            const name = r.querySelector('.i-name').value;
+            const price = parseFloat(r.querySelector('.i-price').value) || 0;
+            if (name || price) items.push({
+                name, nameCN: r.querySelector('.i-cn').value || name, price
+            });
+        });
+        
+        return {
+            id: this.currentId,
+            vendor: document.getElementById('v_vendor').value,
+            date: document.getElementById('v_date').value,
+            currency: document.getElementById('v_currency').value,
+            subtotal: parseFloat(document.getElementById('v_sub').value) || 0,
+            tax: parseFloat(document.getElementById('v_tax').value) || 0,
+            total: parseFloat(document.getElementById('v_total').value) || 0,
+            items
+        };
+    },
+    
+    save() {
+        const data = this.collect();
+        const idx = this.records.findIndex(r => r.id === data.id);
+        if (idx >= 0) this.records[idx] = data;
+        else this.records.push(data);
+        
+        localStorage.setItem('bills', JSON.stringify(this.records));
+        this.renderList();
+        document.getElementById('editSection').style.display = 'none';
+        alert('保存成功！');
+    },
+    
+    deleteCurrent() {
+        if (confirm('確定刪除？')) {
+            this.records = this.records.filter(r => r.id !== this.currentId);
+            localStorage.setItem('bills', JSON.stringify(this.records));
+            this.renderList();
+            document.getElementById('editSection').style.display = 'none';
+        }
+    },
+    
+    // ========== 手動 ==========
+    showManual() {
+        document.getElementById('manualSection').style.display = 'block';
+        document.getElementById('editSection').style.display = 'none';
+    },
+    
+    parseManual() {
+        this.parseText(document.getElementById('manualText').value);
+    },
+    
+    // ========== 列表 ==========
+    renderList() {
+        document.getElementById('count').textContent = this.records.length;
+        const list = document.getElementById('list');
+        
+        if (!this.records.length) {
+            list.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">暫無記錄</div>';
+            return;
+        }
+        
+        list.innerHTML = this.records.sort((a,b) => new Date(b.date) - new Date(a.date)).map(r => `
+            <div class="record-item" onclick="app.edit('${r.id}')">
+                <div>
+                    <div style="font-weight:600;">${r.vendor || '未命名'}</div>
+                    <div style="font-size:12px;color:#666;">${r.date} · ${r.items.length}項</div>
+                </div>
+                <div class="record-amount">${r.currency} ${r.total.toFixed(2)}</div>
+            </div>
+        `).join('');
+    },
+    
+    edit(id) {
+        const r = this.records.find(x => x.id === id);
+        if (r) this.openEditor(r, id);
+    },
+    
+    clearAll() {
+        if (confirm('清空所有記錄？')) {
+            this.records = [];
+            localStorage.removeItem('bills');
+            this.renderList();
+        }
+    },
+    
+    // ========== 導出 ==========
+    getData() {
+        const rows = [];
+        this.records.forEach(r => {
+            if (!r.items.length) {
+                rows.push({日期:r.date, 商家:r.vendor, 幣種:r.currency, 品項:'', 中文:'', 單價:'', 小計:r.subtotal, 稅項:r.tax, 總計:r.total});
+            } else {
+                r.items.forEach((it, i) => {
+                    rows.push({
+                        日期: i===0?r.date:'',
+                        商家: i===0?r.vendor:'',
+                        幣種: i===0?r.currency:'',
+                        品項: it.name,
+                        中文: it.nameCN,
+                        單價: it.price,
+                        小計: i===0?r.subtotal:'',
+                        稅項: i===0?r.tax:'',
+                        總計: i===0?r.total:''
+                    });
+                });
+            }
+        });
+        return rows;
+    },
+    
+    exportExcel() {
+        const data = this.getData();
+        if (!data.length) return alert('無記錄');
+        const ws = XLSX.utils.json_to_sheet(data);
+        ws['!cols'] = [{wch:12}, {wch:20}, {wch:8}, {wch:25}, {wch:20}, {wch:10}, {wch:10}, {wch:10}, {wch:10}];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '帳單');
+        XLSX.writeFile(wb, `帳單_${new Date().toISOString().split('T')[0]}.xlsx`);
+    },
+    
+    exportCSV() {
+        const data = this.getData();
+        if (!data.length) return alert('無記錄');
+        const headers = Object.keys(data[0]);
+        const csv = [
+            headers.join(','),
+            ...data.map(r => headers.map(h => {
+                const v = r[h];
+                if (v === undefined || v === null) return '';
+                const s = String(v);
+                return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+            }).join(','))
+        ].join('\n');
+        
+        const blob = new Blob(['\ufeff'+csv], {type:'text/csv'});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `帳單_${new Date().toISOString().split('T')[0]}.csv`;
+        a.click();
+    }
+};
+
+app.init();
+</script>
+
+</body>
+</html>
